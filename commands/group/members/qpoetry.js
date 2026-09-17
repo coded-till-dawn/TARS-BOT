@@ -6,7 +6,7 @@ const poetURL = "https://poetrydb.org/";
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
 	const { sendMessageWTyping, evv } = msgInfoObj;
-	if (!args) return sendMessageWTyping(from, { text: "Provide author argument." }, { quoted: msg });
+	args = args || [];
 	if (args.length == 1 && args[0].toLowerCase() == "authors") {
 		await axios(poetURL + "/author")
 			.then((res) => {
@@ -27,8 +27,6 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 			});
 		return;
 	}
-	if (args.length == 0)
-		return sendMessageWTyping(from, { text: `Enter author.\n add authors to know all auther.` }, { quoted: msg });
 	if (args.includes("author") && args.includes("title")) {
 		let author = evv
 			.substring(evv.indexOf("author") + 7, evv.lastIndexOf("title"))
@@ -82,7 +80,24 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				console.log(err);
 			});
 	} else {
-		sendMessageWTyping(from, { text: `Must include author in command` }, { quoted: msg });
+		await axios(poetURL + "random/1")
+			.then((res) => {
+				try {
+					const poem = res.data[0];
+					let mess = `\n-------------------------------------------------------------\n\n: ${poem.author} : \n-------------------------------------------------------------\n\nTitle ${poem.title}\n\n-------------------------------------------------------------\n\n${readMore}`;
+					Object.values(poem.lines).forEach((value) => {
+						mess += value.trim() + "\n";
+					});
+					mess += "\n-------------------------------------------------------------";
+					sendMessageWTyping(from, { text: mess }, { quoted: msg });
+				} catch {
+					sendMessageWTyping(from, { text: "Failed to parse random poem." }, { quoted: msg });
+				}
+			})
+			.catch((err) => {
+				sendMessageWTyping(from, { text: "Failed to fetch random poem." }, { quoted: msg });
+				console.log(err);
+			});
 	}
 };
 

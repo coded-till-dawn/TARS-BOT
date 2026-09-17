@@ -1,19 +1,18 @@
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { groupAdmins, groupMetadata, sendMessageWTyping, botNumber, extendedMessageOriginal } = msgInfoObj;
+	const { groupAdmins, groupMetadata, sendMessageWTyping, isBotAdmin, extendedMessageOriginal } = msgInfoObj;
 	// return sendMessageWTyping(
 	//     from,
 	//     { text: "```❌ The admin commands are blocked for sometime to avoid ban on whatsapp!```" },
 	//     { quoted: msg }
 	// );
 
-	if (!groupAdmins.includes(botNumber[0]) && !groupAdmins.includes(botNumber[1])) {
+	if (!isBotAdmin) {
 		return sendMessageWTyping(from, { text: "❌ I'm not admin here." }, { quoted: msg });
 	}
 
 	if (!extendedMessageOriginal) {
 		return sendMessageWTyping(from, { text: "Mention or tag member." }, { quoted: msg });
 	}
-
 	const taggedJid = extendedMessageOriginal.participant || extendedMessageOriginal.mentionedJid?.[0];
 	if (!taggedJid) {
 		return sendMessageWTyping(from, { text: "Mention or tag member." }, { quoted: msg });

@@ -1,4 +1,4 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 dotenv.config();
 
 import { downloadMediaMessage } from "baileys";
@@ -51,8 +51,8 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 	// }
 
 	const savedStealText = memberData && memberData !== -1 ? memberData.customStealText : null;
-	let packName = savedStealText || "eva";
-	let authorName = savedStealText ? undefined : "jacktheboss220";
+	let packName = savedStealText || "TARS";
+	let authorName = savedStealText ? undefined : "ODDONE💙";
 
 	const isPackIncluded = args.includes("pack");
 	const isAuthorIncluded = args.includes("author");
@@ -82,28 +82,28 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 
 	const outputOptions = isCrop
 		? [
-				`-vcodec`,
-				`libwebp`,
-				`-vf`,
-				buildCropFilter(focalPoint),
-				`-lossless`,
-				`0`,
-				`-q:v`,
-				`${quality}`,
-				`-loop`,
-				`0`,
-				`-ss`,
-				`00:00:00.0`,
-				`-t`,
-				`00:00:09.0`,
-				`-preset`,
-				`default`,
-				`-an`,
-				`-s`,
-				`512:512`,
-			]
+			`-vcodec`,
+			`libwebp`,
+			`-vf`,
+			buildCropFilter(focalPoint),
+			`-lossless`,
+			`0`,
+			`-q:v`,
+			`${quality}`,
+			`-loop`,
+			`0`,
+			`-ss`,
+			`00:00:00.0`,
+			`-t`,
+			`00:00:09.0`,
+			`-preset`,
+			`default`,
+			`-an`,
+			`-s`,
+			`512:512`,
+		]
 		: isVideoType
-		? [
+			? [
 				`-vcodec`,
 				`libwebp`,
 				`-vf`,
@@ -120,7 +120,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				`default`,
 				`-an`,
 			]
-		: [
+			: [
 				`-vcodec`,
 				`libwebp`,
 				`-vf`,

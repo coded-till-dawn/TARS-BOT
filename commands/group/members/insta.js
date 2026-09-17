@@ -1,12 +1,12 @@
-import snapsave from "snapsave-downloader";
 import axios from "axios";
-import { fileTypeFromBuffer } from "file-type";
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { prefix, sendMessageWTyping, ig } = msgInfoObj;
+	const { prefix, sendMessageWTyping } = msgInfoObj;
 
-	if (args.length === 0)
+	if (args.length === 0) {
 		return sendMessageWTyping(from, { text: `❌ URL is empty! \nSend ${prefix}insta url` }, { quoted: msg });
+	}
+
 	let urlInstagram = args[0];
 
 	if (
@@ -16,103 +16,70 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 			urlInstagram.includes("instagram.com/reel/") ||
 			urlInstagram.includes("instagram.com/tv/")
 		)
-	)
+	) {
 		return sendMessageWTyping(
 			from,
 			{ text: `❌ Wrong URL! Only Instagram posted videos, tv and reels can be downloaded.` },
 			{ quoted: msg }
 		);
+	}
 
-	if (urlInstagram.includes("?")) urlInstagram = urlInstagram.split("/?")[0];
-	console.log(urlInstagram);
+	if (urlInstagram.includes("?")) {
+		urlInstagram = urlInstagram.split("/?")[0].split("?")[0];
+	}
 
-	// ig.fetchPost(urlInsta).then(async (res) => {
-	//     if (res.media_count == 1) {
-	//         if (res.links[0].type == "video") {
-	//             sock.sendMessage(from,
-	//                 { video: { url: res.links[0].url } },
-	//                 { quoted: msg }
-	//             )
-	//         } else if (res.links[0].type == "image") {
-	//             sock.sendMessage(from,
-	//                 { image: { url: res.links[0].url } },
-	//                 { quoted: msg }
-	//             )
-	//         }
-	//     } else if (res.media_count > 1) {
-	//         for (let i = 0; i < res.media_count; i++) {
-	//             await new Promise((resolve) => setTimeout(resolve, 500));
-	//             if (res.links[i].type == "video") {
-	//                 sock.sendMessage(from,
-	//                     { video: { url: res.links[i].url } },
-	//                     { quoted: msg }
-	//                 )
-	//             } else if (res.links[i].type == "image") {
-	//                 sock.sendMessage(from,
-	//                     { image: { url: res.links[i].url } },
-	//                     { quoted: msg }
-	//                 )
-	//             }
-	//         }
-	//     }
-	// }).catch(() => {
-	snapsave(urlInstagram)
-		.then(async (res) => {
-			if (res.status) {
-				const data = [...new Set(res.data.map((item) => item.url))];
+	const apiKey = process.env.APIDIRECT_KEY;
+	if (!apiKey) {
+		return sendMessageWTyping(from, { text: `❌ APIDIRECT_KEY is not configured in .env` }, { quoted: msg });
+	}
 
-				for (let i = 0; i < data.length; i++) {
-					// await new Promise((resolve) => setTimeout(resolve, 500));
-					const url = data[i];
-					const detected = await detectUrlType(url);
-
-					if (detected.detected === "video") {
-						await sendMessageWTyping(from, { video: { url: url } }, { quoted: msg });
-					} else if (detected.detected === "image") {
-						await sendMessageWTyping(from, { image: { url: url } }, { quoted: msg });
-					} else {
-						await sendMessageWTyping(
-							from,
-							{ document: { url: url }, mimetype: detected.mime, fileName: `file.${detected.ext}` },
-							{ quoted: msg }
-						);
-					}
-					await new Promise((resolve) => setTimeout(resolve, 1000));
-				}
-			} else {
-				sendMessageWTyping(from, { text: "No Data Found!!" }, { quoted: msg });
-			}
-		})
-		.catch((err) => {
-			console.log(err);
-			sendMessageWTyping(from, { text: "Error!! Maybe private account or invalid URL." }, { quoted: msg });
-		});
-	// });
-};
-
-async function detectUrlType(url) {
 	try {
-		const res = await axios.get(url, {
-			responseType: "arraybuffer",
-			headers: { Range: "bytes=0-16383" },
+		const response = await axios.get("https://apidirect.io/v1/instagram/post", {
+			params: { url: urlInstagram },
+			headers: { "X-API-Key": apiKey },
 		});
 
-		const buffer = Buffer.from(res.data);
-		const type = await fileTypeFromBuffer(buffer);
+		const post = response.data?.post;
 
-		if (!type) {
-			return { type: "unknown", reason: "no magic bytes detected" };
+		if (!post) {
+			return sendMessageWTyping(from, { text: `❌ Couldn't extract media from this Instagram post.` }, { quoted: msg });
 		}
 
-		return {
-			ext: type.ext,
-			mime: type.mime,
-			detected: type.mime.startsWith("image/") ? "image" : type.mime.startsWith("video/") ? "video" : "other",
+		// Helper to send individual media
+		const sendMedia = async (mediaObj) => {
+			if (mediaObj.is_video === true && mediaObj.video_url) {
+				await sendMessageWTyping(from, { video: { url: mediaObj.video_url } }, { quoted: msg });
+			} else if (mediaObj.url) {
+				await sendMessageWTyping(from, { image: { url: mediaObj.url } }, { quoted: msg });
+			}
 		};
+
+		if (post.carousel_media && Array.isArray(post.carousel_media) && post.carousel_media.length > 0) {
+			// Handle carousel (multiple images/videos)
+			for (const item of post.carousel_media) {
+				await sendMedia(item);
+				// Small delay to prevent rate limits/message flooding
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+			}
+		} else {
+			// Handle single image/video
+			await sendMedia(post);
+		}
+
 	} catch (err) {
-		return { error: err.message };
+		const status = err.response?.status;
+		if (status === 401 || status === 403) {
+			sendMessageWTyping(from, { text: `❌ Authentication failed with API Direct.` }, { quoted: msg });
+		} else if (status === 404) {
+			sendMessageWTyping(from, { text: `❌ Post not found or is private.` }, { quoted: msg });
+		} else if (status === 429) {
+			sendMessageWTyping(from, { text: `❌ Rate limit exceeded. Try again later.` }, { quoted: msg });
+		} else {
+			console.error("API Direct Instagram Error:", err?.response?.data || err.message);
+			sendMessageWTyping(from, { text: `❌ Error fetching Instagram media.` }, { quoted: msg });
+		}
 	}
-}
+};
 
 export default () => ({
 	cmd: ["insta", "i"],

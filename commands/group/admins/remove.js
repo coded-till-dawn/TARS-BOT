@@ -6,14 +6,14 @@ const myNumbers = [
 ];
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { groupAdmins, sendMessageWTyping, groupMetadata, botNumber, extendedMessageOriginal } = msgInfoObj;
+	const { groupAdmins, sendMessageWTyping, groupMetadata, isBotAdmin, extendedMessageOriginal } = msgInfoObj;
 	// return sendMessageWTyping(
 	//     from,
 	//     { text: "```❌ The admin commands are blocked for sometime to avoid ban on whatsapp!```" },
 	//     { quoted: msg }
 	// );
 
-	if (!groupAdmins.includes(botNumber[0]) && !groupAdmins.includes(botNumber[1])) {
+	if (!isBotAdmin) {
 		return sendMessageWTyping(from, { text: `❌ I'm not admin here` }, { quoted: msg });
 	}
 

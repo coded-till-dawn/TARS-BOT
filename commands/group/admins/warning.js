@@ -9,7 +9,7 @@ const myNumber = [
 	process.env.MY_NUMBER.split(",")[1] + "@lid",
 ];
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	let { command, groupAdmins, sendMessageWTyping, botNumber, extendedMessageOriginal } = msgInfoObj;
+	let { command, groupAdmins, sendMessageWTyping, botNumber, isBotAdmin, extendedMessageOriginal } = msgInfoObj;
 	try {
 		if (!extendedMessageOriginal) {
 			return sendMessageWTyping(from, { text: "❌ Tag someone! or reply to a message" }, { quoted: msg });
@@ -100,7 +100,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 									{ $push: { warning: { group: from, count: warnCount } } }
 								);
 							if (warnCount >= 3) {
-								if (!groupAdmins.includes(botNumber[0]) && !groupAdmins.includes(botNumber[1])) {
+								if (!isBotAdmin) {
 									sendMessageWTyping(from, { text: "❌ I'm not Admin here!" }, { quoted: msg });
 									return;
 								}

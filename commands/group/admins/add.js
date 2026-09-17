@@ -1,9 +1,9 @@
 import { normalizeJID } from "../../../utils/lid.js";
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { evv, groupAdmins, sendMessageWTyping, botNumber, extendedMessageOriginal } = msgInfoObj;
+	const { evv, groupAdmins, sendMessageWTyping, isBotAdmin, extendedMessageOriginal } = msgInfoObj;
 
-	if (!groupAdmins.includes(botNumber[0]) && !groupAdmins.includes(botNumber[1])) {
+	if (!isBotAdmin) {
 		return sendMessageWTyping(from, { text: "❌ Bot needs to be admin to add members." }, { quoted: msg });
 	}
 	if (!evv && !extendedMessageOriginal && !args[0]) {

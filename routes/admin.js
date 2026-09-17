@@ -2,7 +2,7 @@ import { Router } from "express";
 import { group } from "../db/groupData.js";
 import { member } from "../db/members.js";
 import { bot, getBotData } from "../db/botData.js";
-import { cmdToText } from "../utils/commandLoader.js";
+import { cmdToText, getCommandOriginalScope } from "../utils/commandLoader.js";
 import mdClient from "../db/client.js";
 import passport from "passport";
 import { normalizeJID } from "../utils/lid.js";
@@ -367,7 +367,16 @@ router.get("/api/admin/commands", requireAdmin, async (req, res) => {
 		const [cmds, botData] = await Promise.all([cmdToText(), getBotData()]);
 		const disabled = botData?.disabledGlobally || [];
 		const annotate = (list, type) =>
-			list.map((c) => ({ ...c, type, disabledGlobally: c.cmd.some((k) => disabled.includes(k)) }));
+			list.map((c) => {
+				const primaryAlias = c.cmd[0];
+				const originalType = getCommandOriginalScope(primaryAlias) || type;
+				return { 
+					...c, 
+					type: type, // This is the effectiveType based on the runtime dictionary it was returned from
+					originalType,
+					disabledGlobally: c.cmd.some((k) => disabled.includes(k)) 
+				};
+			});
 		res.json({
 			publicCommands: annotate(cmds.publicCommands, "public"),
 			groupCommands:  annotate(cmds.groupCommands,  "group"),

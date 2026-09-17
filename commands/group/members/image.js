@@ -3,6 +3,18 @@ import fs from "fs";
 import { downloadMediaMessage } from "baileys";
 import { writeFile, readFile } from "fs/promises";
 
+let ffmpegPath1 = process.env.FFMPEG_PATH;
+if (!ffmpegPath1) {
+	try {
+		const { default: ffmpegStatic } = await import("ffmpeg-static");
+		const { existsSync } = await import("fs");
+		ffmpegPath1 = ffmpegStatic && existsSync(ffmpegStatic) ? ffmpegStatic : "ffmpeg";
+	} catch (err) {
+		ffmpegPath1 = "ffmpeg";
+	}
+}
+ffmpeg.setFfmpegPath(ffmpegPath1);
+
 const getRandom = (ext) => {
 	return `${Math.floor(Math.random() * 10000)}${ext}`;
 };
@@ -36,9 +48,15 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 			const file = ffmpeg(`./${media}`).fromFormat("webp_pipe").save(ran);
 			file.on("error", (err) => {
 				console.log(err);
+				
+				let errMsg = "❌ There is some problem!\nOnly non-animated stickers can be convert to image!";
+				if (err.message && err.message.includes("not found")) {
+					errMsg = "❌ Failed to process media (FFmpeg not found). Please try again later.";
+				}
+
 				sendMessageWTyping(
 					from,
-					{ text: "❌ There is some problem!\nOnly non-animated stickers can be convert to image!" },
+					{ text: errMsg },
 					{ quoted: msg }
 				);
 				try {
@@ -55,7 +73,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 						from,
 						{
 							image: imageBuffer,
-							caption: "Sent by eva",
+							caption: "Sent by TARS",
 							mimetype: "image/png",
 						},
 						{ quoted: msg }

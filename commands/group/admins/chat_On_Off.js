@@ -1,6 +1,6 @@
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { groupAdmins, botNumber, sendMessageWTyping } = msgInfoObj;
-	if (!groupAdmins.includes(botNumber[0]) && !groupAdmins.includes(botNumber[1])) {
+	const { groupAdmins, isBotAdmin, sendMessageWTyping } = msgInfoObj;
+	if (!isBotAdmin) {
 		return sendMessageWTyping(from, { text: `❌ I'm not an admin here` }, { quoted: msg });
 	}
 

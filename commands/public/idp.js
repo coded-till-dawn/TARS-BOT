@@ -8,23 +8,20 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 
 	let config = {
 		method: "get",
-		maxBodyLength: Infinity,
-		url: `https://i.instagram.com/api/v1/users/web_profile_info/?username=${prof}`,
+		url: `https://apidirect.io/v1/instagram/user?username=${prof}`,
 		headers: {
-			"User-Agent": "iphone_ua",
-			"x-ig-app-id": "936619743392459",
-			Cookie: "csrftoken=dOj8Cg7x7dcopcYjfdyb2CXn5Q5q8Nae; ig_did=23EC9D92-710B-4E35-81C6-302661C68C7A; ig_nrcb=1; mid=aSVNkwAAAAHSQh6TfnudZMPSYyKd",
+			"X-API-Key": process.env.APIDIRECT_KEY,
 		},
 	};
 
 	axios
 		.request(config)
 		.then((res) => {
-			if (res.data.status === "ok") {
+			if (res.data && res.data.user && res.data.user.profile_pic_url_hd) {
 				sendMessageWTyping(
 					from,
 					{
-						image: { url: res.data.data.user.profile_pic_url_hd },
+						image: { url: res.data.user.profile_pic_url_hd },
 						caption: `*Here is the Profile Picture of ${prof}*`,
 					},
 					{ quoted: msg }

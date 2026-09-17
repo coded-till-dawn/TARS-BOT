@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { getCommands, toggleCommand, getCommandStats } from '../lib/api.js'
 import { useToast } from '../App.jsx'
+import { addWsListener, removeWsListener } from '../hooks/wsClient.js'
 
 const TYPE_FILTERS = ['all', 'public', 'group', 'admin', 'owner']
 
@@ -25,6 +26,19 @@ export default function Commands() {
       })
       .catch(() => toast('Failed to load commands', false))
       .finally(() => setLoading(false))
+
+    const onScopeChange = ({ data }) => {
+      if (!data) return;
+      const { commandKeys, newScope, originalScope } = data;
+      setAll(prev => prev.map(c => 
+        c.cmd.some(k => commandKeys.includes(k))
+          ? { ...c, type: newScope, originalType: originalScope }
+          : c
+      ));
+    };
+
+    addWsListener('command_scope_changed', onScopeChange);
+    return () => removeWsListener('command_scope_changed', onScopeChange);
   }, [])
 
   const rows = useMemo(() => {
@@ -111,7 +125,14 @@ export default function Commands() {
                   return (
                   <tr key={c.cmd[0]} className={c.disabledGlobally ? 'row-disabled' : ''}>
                     <td><strong style={{ fontFamily: 'monospace', fontSize: '0.82rem' }}>{c.cmd.join(', ')}</strong></td>
-                    <td><span className={`badge badge-${c.type}`}>{c.type}</span></td>
+                    <td>
+                      <span className={`badge badge-${c.type}`}>{c.type}</span>
+                      {c.originalType && c.originalType !== c.type && (
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 4, textTransform: 'uppercase' }}>
+                          Orig: {c.originalType}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ color: 'var(--text-soft)', maxWidth: 280 }}>{c.desc || '—'}</td>
                     <td><code>{c.usage || c.cmd[0]}</code></td>
                     <td style={{ minWidth: 80 }}>

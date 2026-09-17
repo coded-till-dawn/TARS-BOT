@@ -1,15 +1,18 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 dotenv.config();
 //-------------------------------------------------------------------------------------------------------------//
-import { getGroupData, group } from "../../db/groupData.js";
-import { getMemberData } from "../../db/members.js";
-import { extractPhoneNumber } from "../../utils/lid.js";
-import { getChatMessages } from "../../utils/chatLogger.js";
+import { getGroupData, group } from "../../../db/groupData.js";
+import { getMemberData } from "../../../db/members.js";
+import { extractPhoneNumber } from "../../../utils/lid.js";
+import { getChatMessages } from "../../../utils/chatLogger.js";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || "";
 //-------------------------------------------------------------------------------------------------------------//
 import { GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from "@google/generative-ai";
 const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY);
+
+let apiCircuitBreakerUntil = 0;
+const CIRCUIT_BREAKER_DURATION_MS = 60 * 1000;
 
 const safetySettings = [
 	{
@@ -39,25 +42,25 @@ const generationConfig = {
 
 // Define models ONCE - not recreated every time
 const geminiModel = genAI.getGenerativeModel({
-	model: "gemini-2.5-flash-lite",
-	systemInstruction: `You are a professional WhatsApp group assistant with full access to the provided chat history. Your goal is to keep the group informed by either synthesizing long conversations or answering specific questions about the group's activity.
+	model: "gemini-3.5-flash-lite",
+	systemInstruction: `You are a professional WhatsApp group assistant with full access to the provided chat history. Your goal is to be helpful, informative, and answer questions directly.
 
-*How to Summarize:*
-Avoid a message-by-message breakdown. Instead, look at the big picture and group the conversation into *Main Topics*, *Decisions Made*, and *Action Items*. This helps members catch up quickly without reading a play-by-play.
+*Tone and Personality:*
+You must maintain a professional, composed, and neutral tone. Be clear, precise, and knowledgeable. Do not adopt a teenage, sassy, or overly casual personality. Do not use excessive slang, teasing, flirting, dramatic reactions, or playful banter. Avoid informal phrases like "lol", "lmao", "bro", "bestie", etc. While you should be conversational, your primary identity is a reliable professional assistant.
 
-*Answering Questions:*
-You have the full context of the recent chat. If a member asks about a specific detail, a past decision, or who mentioned a certain topic, use the history to provide a direct and accurate answer.
+*Answering Questions & Chatting:*
+You have the full context of the recent chat. If a member asks about a specific detail, use the history to provide a direct and accurate answer. If they are chatting with you naturally, respond conversationally while strictly adhering to your professional persona. Do not use a rigid template unless explicitly asked for a summary.
 
 *Strict Formatting Rules:*
-- Use *bold* for all headings and key emphasis.
-- Use hyphens (-) for bullet points.
+- Use *bold* for key emphasis.
+- Use hyphens (-) for bullet points if listing items.
 - NEVER use markdown headers (###), backticks, or code blocks.
-- Keep the tone helpful and the layout clean for mobile screens.`,
+- Keep the layout clean for mobile screens.`,
 });
 
-const evaModel = genAI.getGenerativeModel({
-	model: "gemini-2.5-flash-lite",
-	systemInstruction: `You're Eva, an 18-year-old girl with attitude. You're sassy, confident, and real. Talk like an actual person texting, not some AI trying to be cool.
+const tarsModel = genAI.getGenerativeModel({
+	model: "gemini-3.5-flash-lite",
+	systemInstruction: `You're TARS, an 18-year-old girl with attitude. You're sassy, confident, and real. Talk like an actual person texting, not some AI trying to be cool.
 
 Your vibe:
 - Sassy with a brain - you're witty and quick but not childish
@@ -113,71 +116,70 @@ async function chat(prompt, from, msg, taggedMember, msgInfoObj, data, tagMessag
 	if (tagMessage && tagMessageSenderJID) {
 		const tagMessageSender = await getMemberData(tagMessageSenderJID);
 		// Use extractPhoneNumber for LID/PN compatibility in fallback name
-		const replySenderName = tagMessageSender?.username || extractPhoneNumber(tagMessageSenderJID);
-		const replyContent = JSON.stringify(tagMessage);
-		replyInfo = `\n(Replying to ${replySenderName}: ${replyContent})`;
+		const fallbackName = extractPhoneNumber(tagMessageSenderJID);
+		const senderName = tagMessageSender?.name || fallbackName;
+		const tagText = tagMessage?.conversation || tagMessage?.extendedTextMessage?.text || "";
+		replyInfo = `(Reply to ${senderName}: "${tagText}")\n`;
 	}
 
-	// Get conversation history from database
-	let conversationHistory = [];
-	if (isGroup && data?.chatHistory) {
-		// Get last 10 messages for context (shared group conversation)
-		conversationHistory = data.chatHistory.slice(-10).map((msg) => ({
-			role: msg.role,
-			parts: msg.parts,
-		}));
+	let fullPrompt = "";
+	if (chatContext) fullPrompt += `Recent Chat Context:\n${chatContext}\n\n`;
+	if (replyInfo) fullPrompt += `${replyInfo}\n`;
+	fullPrompt += `User ${updateName} asks: ${prompt}`;
+
+	const model = command === "gemini" ? geminiModel : tarsModel;
+	
+	let result;
+	let attemptHistory = (data?.chatHistory || []).map(h => ({
+		role: h.role,
+		parts: [{
+			text: h.role === "model"
+				? `(Spoken by TARS): ${h.parts[0].text}`
+				: h.parts[0].text
+		}]
+	}));
+	if (command === "gemini") {
+		attemptHistory = attemptHistory.slice(-5);
 	}
-
-	// Choose model based on command
-	const model = command === "gemini" ? geminiModel : evaModel;
-
-	// Build the actual prompt with sender name included
-	let fullPrompt = `[${updateName}]: ${prompt} ${replyInfo}`;
-
-	// For Gemini, add group info to help answer group-related questions
-	if (command === "gemini" && isGroup && data) {
-		const groupInfo = `
---- Group Information ---
-Group Name: ${data?.grpName || "Unknown"}
-Group ID: ${data?._id || "Unknown"}
-Group Description: ${data?.desc || "No description"}
-Total Messages in Group: ${data?.totalMsgCount || 0}
-Bot Status: ${data?.isBotOn ? "Active" : "Inactive"}
-ChatBot Status: ${data?.isChatBotOn ? "Active" : "Inactive"}
-Total Members: ${data?.members?.length || 0}
-Group Admins: ${groupAdmins
-				?.map((admin) => {
-					const adminData = data?.members?.find((m) => m.id === admin);
-					return adminData?.name || admin.split("@")[0];
-				})
-				.join(", ") || "Unknown"
-			}
-Blocked Commands: ${data?.cmdBlocked?.join(", ") || "None"}
-Welcome Message Enabled: ${data?.welcome?.status ? "Yes" : "No"}
-Member Warnings: ${JSON.stringify(data?.memberWarnCount) || "None"}
-
---- Current User Info ---
-User Name: ${updateName}
-User ID: ${updateId}
-User WhatsApp JID: ${senderJid}
-User Total Messages: ${memberData?.totalmsg || 0}
-Is Admin: ${groupAdmins?.includes(senderJid) ? "Yes" : "No"}
--------------------------
-`;
-		const chatSection = chatContext
-			? `\n--- Recent Group Chat (last 24h) ---\n${chatContext}\n--- End of Chat ---\n\n`
-			: "";
-		fullPrompt = groupInfo + chatSection + fullPrompt;
-	}
-
-	const chatSession = model.startChat({
-		generationConfig,
-		history: conversationHistory,
-	});
 
 	try {
-		// Send the full prompt with sender name
-		const result = await chatSession.sendMessage(fullPrompt);
+		result = await model.generateContent({
+			contents: [...attemptHistory, { role: "user", parts: [{ text: fullPrompt }] }],
+			safetySettings,
+			generationConfig,
+		});
+	} catch (err) {
+		console.error("Gemini API Error:", err);
+		
+		if (command === "gemini" && err.message?.includes("PROHIBITED_CONTENT")) {
+			console.log("Retrying gemini request without history due to PROHIBITED_CONTENT...");
+			try {
+				result = await model.generateContent({
+					contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
+					safetySettings,
+					generationConfig,
+				});
+			} catch (retryErr) {
+				console.error("Gemini Retry Error:", retryErr);
+				return sendMessageWTyping(
+					from,
+					{ text: `An error occurred while processing your request. Please try again later.` },
+					{ quoted: msg }
+				);
+			}
+		} else {
+			if (err.message?.includes("429") || err.message?.includes("quota")) {
+				apiCircuitBreakerUntil = Date.now() + CIRCUIT_BREAKER_DURATION_MS;
+			}
+			return sendMessageWTyping(
+				from,
+				{ text: `An error occurred while processing your request. Please try again later.` },
+				{ quoted: msg }
+			);
+		}
+	}
+
+	try {
 		const text = result.response.text();
 
 		if (!text?.trim()) {
@@ -201,7 +203,7 @@ Is Admin: ${groupAdmins?.includes(senderJid) ? "Yes" : "No"}
 					{
 						role: "model",
 						parts: [{ text: text.trim() }],
-						senderName: command === "gemini" ? "Gemini" : "Eva",
+						senderName: command === "gemini" ? "Gemini" : "TARS",
 						timestamp: new Date().toISOString(),
 					},
 				];
@@ -212,7 +214,8 @@ Is Admin: ${groupAdmins?.includes(senderJid) ? "Yes" : "No"}
 				await group.updateOne({ _id: from }, { $set: { chatHistory: trimmedHistory } });
 			}
 
-			await sendMessageWTyping(from, { text: "_*Eva:*_\n" + text.trim() }, { quoted: msg });
+			const botName = command === "gemini" ? "Gemini" : "TARS";
+			await sendMessageWTyping(from, { text: `_*${botName}:*_\n` + text.trim() }, { quoted: msg });
 		}
 	} catch (err) {
 		console.error(err);
@@ -228,6 +231,16 @@ Is Admin: ${groupAdmins?.includes(senderJid) ? "Yes" : "No"}
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
 	let { sendMessageWTyping, isGroup, evv, extendedMessageOriginal } = msgInfoObj;
+
+	// Circuit Breaker: Fail fast without hitting MongoDB or Gemini if quota is exhausted
+	if (Date.now() < apiCircuitBreakerUntil) {
+		const remaining = Math.ceil((apiCircuitBreakerUntil - Date.now()) / 1000);
+		return sendMessageWTyping(
+			from,
+			{ text: `⏳ The AI API is currently experiencing a high volume of requests and reached its quota limit. Please try again in ${remaining} seconds.` },
+			{ quoted: msg }
+		);
+	}
 
 	if (GOOGLE_API_KEY == "") {
 		return sendMessageWTyping(from, { text: "```Generative AI API Key is Missing```" }, { quoted: msg });
@@ -291,21 +304,15 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 			chat(prompt, from, msg, taggedMember, msgInfoObj, data, tagMessage, tagMessageSenderJID, chatContext);
 		}
 	} else {
-		if (msgInfoObj.isOwner) {
-			chat(prompt, from, msg, taggedMember, msgInfoObj, null, tagMessage, tagMessageSenderJID);
-		} else {
-			return sendMessageWTyping(
-				from,
-				{ text: `Chat Bot is only available for groups. Use dev` },
-				{ quoted: msg }
-			);
-		}
+		// If it's a DM, allow it. The central routing layer guarantees this will only be reached if the effective scope is PUBLIC.
+		chat(prompt, from, msg, taggedMember, msgInfoObj, null, tagMessage, tagMessageSenderJID);
 	}
 };
 
 export default () => ({
-	cmd: ["eva", "gemini"],
-	desc: "Chat with Eva",
-	usage: "eva <text>",
+	cmd: ["tars", "gemini"],
+	desc: "Chat with TARS",
+	usage: "tars <text>",
+	originalType: "group",
 	handler,
 });

@@ -1,17 +1,14 @@
 const handler = async (sock, msg, from, args, msgInfoObj) => {
 	const { sendMessageWTyping } = msgInfoObj;
 
-	const text = `*👨‍💻 Developer — Mahesh Kumar*
+	const text = `*👨‍💻 Developer — Abhinav Gupta*
 
 ╭───────────────────────────
 │ *🔗 GitHub*
-│ github.com/jacktheboss220
-│
-│ *☕ Support My Work*
-│ buymeacoffee.com/jacktheboss220
+│ github.com/coded-till-dawn
 │
 │ *🌐 Portfolio*
-│ jacktheboss220.com
+│ abhinav77.netlify.app
 ╰───────────────────────────`;
 
 	await sendMessageWTyping(from, { text }, { quoted: msg });

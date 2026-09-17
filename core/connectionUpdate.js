@@ -37,11 +37,9 @@ const getConnectionUpdate = async (startSock, events) => {
 				`🔄 <b>Bot Disconnected</b>\n` +
 					`━━━━━━━━━━━━━━\n` +
 					`📋 <b>Reason:</b> ${escapeHtml(reason)}\n` +
-					`⏳ Reconnecting in 5 seconds...`,
+					`⏳ Reconnecting...`,
 			);
-			setTimeout(() => {
-				startSock("reconnect");
-			}, 5000);
+			startSock("reconnect");
 		}
 	} else if (connection === "connecting") {
 		console.log("🔗 Connecting to WhatsApp...");

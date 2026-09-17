@@ -1,4 +1,4 @@
-﻿import { getMemberData } from "../../db/members.js";
+import { getMemberData } from "../../db/members.js";
 import { downloadContentFromMessage } from "baileys";
 import WSF from "wa-sticker-formatter";
 import nodeWebpmux from "node-webpmux";
@@ -38,7 +38,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 	const memberData = await getMemberData(senderJid);
 
 	if (type === "extendedTextMessage" && content.includes("stickerMessage")) {
-		let packName = "eva";
+		let packName = "TARS";
 		let authorName = "jacktheboss220";
 		if (args.includes("pack")) packName = args.join(" ").split("pack ")[1]?.split("author")[0] || packName;
 		if (args.includes("author")) authorName = args.join(" ").split("author ")[1]?.split("pack")[0] || authorName;
@@ -59,7 +59,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				command === "stealn"
 					? await WSF.setMetadata(undefined, undefined, media)
 					: await WSF.setMetadata(
-							packOrAuthor ? packName : evv ? evv : memberData?.customStealText || "eva",
+							packOrAuthor ? packName : evv ? evv : memberData?.customStealText || "TARS",
 							packOrAuthor
 								? authorName
 								: evv
@@ -73,7 +73,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 		} catch (error) {
 			// webpmux fails on animated/lossless WebP — retry with node-webpmux (pure JS/Wasm)
 			try {
-				const finalPack = packOrAuthor ? packName : evv || memberData?.customStealText || "eva";
+				const finalPack = packOrAuthor ? packName : evv || memberData?.customStealText || "TARS";
 				const finalAuthor = packOrAuthor
 					? authorName
 					: evv ? "" : memberData?.customStealText ? undefined : "jacktheboss220";

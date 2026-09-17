@@ -3,14 +3,22 @@
 // Re-exports nothing React-specific — plain JS module.
 
 const listeners = new Map()
+let lastStatus = null
 
 function emit(type, data) {
+  if (type === '_status' && data && data.status) {
+    lastStatus = data.status
+  }
   listeners.get(type)?.forEach(fn => fn(data))
 }
 
 export function addWsListener(type, fn) {
   if (!listeners.has(type)) listeners.set(type, new Set())
   listeners.get(type).add(fn)
+  
+  if (type === '_status' && lastStatus) {
+    fn({ status: lastStatus })
+  }
 }
 
 export function removeWsListener(type, fn) {

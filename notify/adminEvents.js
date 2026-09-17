@@ -32,6 +32,10 @@ export function pushActivity(kind, detail = {}) {
   emit({ type: 'activity', event })
 }
 
+export function pushScopeChange(data) {
+  emit({ type: 'command_scope_changed', data })
+}
+
 export function getLogs(limit = 200, level = 'all', since = 0) {
   let logs = logBuffer
   if (level !== 'all') logs = logs.filter(e => e.level === level)

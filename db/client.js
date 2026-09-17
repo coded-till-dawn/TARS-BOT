@@ -29,6 +29,9 @@ const mdClient = new MongoClient(uri, {
 		// Index for group member queries ($inc / $set by members.id)
 		// Use sparse: true to match any existing index definition and avoid conflicts
 		await db.collection("Groups").createIndex({ "members.id": 1 }, { background: true, sparse: true });
+
+		// Index for Feature Toggles
+		await db.collection("FeatureToggles").createIndex({ groupId: 1, feature: 1 }, { unique: true, background: true });
 	} catch (err) {
 		console.error("Error connecting to MongoDB:", err);
 	}

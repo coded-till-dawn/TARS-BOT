@@ -18,6 +18,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				srlimit: 1,
 			},
 			timeout: 8000,
+			headers: { "User-Agent": "WhatsAppBot/1.0" },
 		});
 
 		const results = searchRes.data.query.search;
@@ -37,6 +38,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				format: "json",
 			},
 			timeout: 8000,
+			headers: { "User-Agent": "WhatsAppBot/1.0" },
 		});
 
 		let extract = summaryRes.data.query.pages[pageId].extract || "";

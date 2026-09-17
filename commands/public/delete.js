@@ -1,42 +1,71 @@
-﻿import { extractPhoneNumber } from "../../utils/lid.js";
+import { extractPhoneNumber, getPNFromLID } from "../../utils/lid.js";
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { botNumber, sendMessageWTyping, groupAdmins, senderJid, extendedMessageOriginal } = msgInfoObj;
+	const { botNumber, sendMessageWTyping, groupAdmins, senderJid, extendedMessageOriginal, isGroup, isBotMessageId } = msgInfoObj;
 
 	try {
-		// Check if the message is a reply
-		if (!extendedMessageOriginal) {
+		// 1. First verify a message was replied to and has an ID
+		if (!extendedMessageOriginal || !extendedMessageOriginal.stanzaId) {
 			return sendMessageWTyping(from, { text: `❌ Tag a message to delete.` }, { quoted: msg });
 		}
 
-		// Check if the sender is authorized to delete messages
-		const senderIsAdmin = groupAdmins.includes(senderJid);
-		const isBotAdmin = groupAdmins.includes(botNumber[0]) || groupAdmins.includes(botNumber[1]);
 		const participant = extendedMessageOriginal.participant;
-		// Use extractPhoneNumber for LID/PN compatibility
-		const isBotMessage =
-			extractPhoneNumber(participant) === extractPhoneNumber(botNumber[0]) ||
-			extractPhoneNumber(participant) === extractPhoneNumber(botNumber[1]);
+		let isBotMessage = false;
 
+		// 2. Determine bot message ownership safely without assuming missing participant === bot
+		if (participant) {
+			let normalizedParticipant = participant;
+			if (participant.includes("@lid")) {
+				normalizedParticipant = getPNFromLID(sock, participant) || participant;
+			}
+			
+			const botJids = [
+				botNumber[0],
+				botNumber[1],
+				sock.user?.id,
+				sock.user?.lid
+			].filter(Boolean);
+
+			isBotMessage = botJids.some((jid) =>
+				extractPhoneNumber(normalizedParticipant) === extractPhoneNumber(jid)
+			);
+		}
+		
+		// Fallback: If participant checks failed or were skipped, use cache lookup to verify ownership.
+		if (!isBotMessage && isBotMessageId && isBotMessageId(from, extendedMessageOriginal.stanzaId)) {
+			isBotMessage = true;
+		}
+
+		// 3. Permission checks for other users' messages
 		if (!isBotMessage) {
+			if (!isGroup) {
+				return sendMessageWTyping(
+					from,
+					{ text: `❌ You cannot delete someone else's message in a private chat.` },
+					{ quoted: msg }
+				);
+			}
+
+			const senderIsAdmin = groupAdmins.includes(senderJid);
+			const isBotAdmin = groupAdmins.includes(botNumber[0]) || groupAdmins.includes(botNumber[1]);
+
 			if (!senderIsAdmin) {
 				return sendMessageWTyping(
 					from,
 					{ text: `❌ Only admins can delete others' messages.` },
-					{ quoted: msg },
+					{ quoted: msg }
 				);
 			}
-
 			if (!isBotAdmin) {
 				return sendMessageWTyping(
 					from,
 					{ text: `❌ Bot needs to be admin to delete others' messages.` },
-					{ quoted: msg },
+					{ quoted: msg }
 				);
 			}
 		}
 
-		// Prepare options for deleting the message
+		// 4. Prepare and send delete payload
 		const options = {
 			remoteJid: from,
 			fromMe: false,
@@ -44,13 +73,11 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 			participant: extendedMessageOriginal.participant,
 		};
 
-		// If the message is from the bot, delete its own message
 		if (isBotMessage) {
-			options.remoteJid = botNumber[0];
 			options.fromMe = true;
+			delete options.participant;
 		}
 
-		// Send the delete message request (via queue, not a direct sock call)
 		await sendMessageWTyping(from, { delete: options });
 	} catch (err) {
 		console.error("Error deleting message:", err);

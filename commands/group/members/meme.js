@@ -62,9 +62,19 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 	const down_meme = getRandom(".mp4");
 	const down_gif = getRandom(".gif");
 	const memeURL = "https://meme-api.com/gimme";
-	await axios.get(`${memeURL}`).then((res) => {
-		let url = res.data.url;
-		if (url.includes("jpg") || url.includes("jpeg") || url.includes("png")) {
+
+	const fetchMeme = async (attempts = 0) => {
+		if (attempts >= 5) {
+			return sendMessageWTyping(from, { text: `*❌ Couldn't find a suitable meme right now. Please try again.*` }, { quoted: msg });
+		}
+
+		await axios.get(`${memeURL}`).then((res) => {
+			if (!res.data || res.data.nsfw !== false || !res.data.url) {
+				return fetchMeme(attempts + 1);
+			}
+
+			let url = res.data.url;
+			if (url.includes("jpg") || url.includes("jpeg") || url.includes("png")) {
 			sendMessageWTyping(from, { image: { url: res.data.url }, caption: `${res.data.title}` });
 		} else {
 			const outputOptions = [`-movflags faststart`, `-pix_fmt yuv420p`, `-vf`, `scale=trunc(iw/2)*2:trunc(ih/2)*2`];
@@ -110,7 +120,13 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 					memoryManager.safeUnlink(down_gif);
 				});
 		}
+	}).catch((err) => {
+		console.error("API error:", err);
+		return fetchMeme(attempts + 1);
 	});
+	};
+
+	await fetchMeme();
 };
 
 export default () => ({

@@ -1,6 +1,11 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+import NodeCache from "node-cache";
+const outgoingMessageCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, maxKeys: 1000 });
+
+import { areJidsSameUser } from "baileys";
+
 import messageQueue from "../queue/messageQueue.js";
 import notifyOwner from "../notify/owner.js";
 import { escapeHtml } from "../notify/telegram.js";
@@ -22,7 +27,20 @@ import {
 	commandsLoaded,
 } from "../utils/commandLoader.js";
 import { getBotData } from "../db/botData.js";
+import { getFeatureState } from "../db/featureToggles.js";
 import { saveChatMessage } from "../utils/chatLogger.js";
+
+const FEATURE_MAP = {
+	"tars": ["tars"],
+	"gemini": ["gemini"],
+	"nsfw": ["nsfw"],
+	"meme": ["meme"],
+	"youtube": ["yt", "ytv", "vs", "song", "play", "yta"],
+	"instagram": ["insta", "i"],
+	"movie": ["movie"],
+	"poetry": ["qpt", "qpoetry"],
+	"quotes": ["quote", "proquote", "pqoute"]
+};
 import { getRankUp } from "../utils/ranks.js";
 
 // These will be used for permission checks
@@ -34,6 +52,22 @@ const botNumber = [
 	process.env.BOT_NUMBER.split(",")[0] + "@s.whatsapp.net",
 	process.env.BOT_NUMBER.split(",")[1] + "@lid",
 ];
+
+async function verifyOwner(sock, senderJid) {
+	if (!senderJid || !senderJid.endsWith("@lid")) return false;
+	try {
+		const resolvedPN = await getPNFromLID(sock, senderJid);
+		if (resolvedPN) {
+			const resolvedSenderJid = resolvedPN.includes("@") ? resolvedPN : `${resolvedPN}@s.whatsapp.net`;
+			return [...myNumber, ...botNumber]
+				.filter(n => n && !n.startsWith("undefined"))
+				.some(n => areJidsSameUser(resolvedSenderJid, n));
+		}
+	} catch (err) {
+		// silent fail
+	}
+	return false;
+}
 
 // Cached tag sticker - loaded once at startup
 let _tagStickerBuffer = null;
@@ -103,7 +137,10 @@ const getCommand = async (sock, msg, cache) => {
 							mediaUploadTimeoutMs: isGroupChat ? 1000 * 60 * 10 : 1000 * 60 * 5,
 						};
 
-						await sock.sendMessage(to, msgObj, sendOptions);
+						const sentMsg = await sock.sendMessage(to, msgObj, sendOptions);
+						if (sentMsg && sentMsg.key && sentMsg.key.id) {
+							outgoingMessageCache.set(`${to}:${sentMsg.key.id}`, true);
+						}
 					} catch (err) {
 						console.error("❌ Error sending message:", err.message);
 						throw err;
@@ -168,12 +205,12 @@ const getCommand = async (sock, msg, cache) => {
 		if (!types.includes(type)) return;
 
 		if (type == "buttonsResponseMessage") {
-			if (msg.message.buttonsResponseMessage.selectedButtonId == "eva")
+			if (msg.message.buttonsResponseMessage.selectedButtonId == "tars")
 				body = body.startsWith(prefix) ? body : prefix + body;
 		} else if (type == "templateButtonReplyMessage") {
 			body = body.startsWith(prefix) ? body : prefix + body;
 		} else if (type == "listResponseMessage") {
-			if (msg.message.listResponseMessage.singleSelectReply.selectedRowId == "eva")
+			if (msg.message.listResponseMessage.singleSelectReply.selectedRowId == "tars")
 				body = body.startsWith(prefix) ? body : prefix + body;
 		}
 
@@ -189,7 +226,9 @@ const getCommand = async (sock, msg, cache) => {
 		//-------------------------------------------------------------------------------------------------------------//
 		const isGroup = from.endsWith("@g.us");
 		const senderJid = isGroup ? msg.key.participant : msg.key.remoteJid;
-		const isOwner = myNumber.includes(senderJid);
+		const isOwner = [...myNumber, ...botNumber]
+			.filter(n => n && !n.startsWith("undefined"))
+			.some(n => areJidsSameUser(senderJid, n));
 		if (!senderJid || !senderJid.includes("@")) return;
 
 		const updateId = msg.key.fromMe ? botNumber[0] : senderJid;
@@ -274,13 +313,13 @@ const getCommand = async (sock, msg, cache) => {
 		}
 
 		// Log text messages to chat history for gemini summarization
-		// Skip: commands (prefix), eva triggers, bot's own messages
-		const isEvaTrigger = body.trim().split(" ")[0].toLowerCase() === "eva";
+		// Skip: commands (prefix), tars triggers, bot's own messages
+		const isTarsTrigger = body.trim().split(" ")[0].toLowerCase() === "tars";
 		if (
 			isGroup &&
 			body &&
 			!isCmd &&
-			!isEvaTrigger &&
+			!isTarsTrigger &&
 			!msg.key.fromMe &&
 			(type === "conversation" || type === "extendedTextMessage")
 		) {
@@ -373,8 +412,11 @@ const getCommand = async (sock, msg, cache) => {
 			groupDataFetched = null;
 		}
 		if (isGroup) groupData = groupDataFetched;
-		if (isGroup && type == "imageMessage" && groupData?.isAutoStickerOn) {
-			if (msg.message.imageMessage.caption == "") {
+		if (isGroup && groupData?.isAutoStickerOn) {
+			const isImage = type === "imageMessage" && !msg.message.imageMessage?.caption;
+			const isGif = type === "videoMessage" && msg.message.videoMessage?.gifPlayback === true && !msg.message.videoMessage?.caption;
+
+			if (isImage || isGif) {
 				commandsPublic["sticker"](sock, msg, from, args, {
 					senderJid,
 					type,
@@ -387,8 +429,12 @@ const getCommand = async (sock, msg, cache) => {
 		}
 		//-------------------------------------------------------------------------------------------------------------//
 		if (senderData?.isBlock) return;
-		const groupAdmins = isGroup ? getGroupAdmins(groupMetadata.participants) : "";
-		const isGroupAdmin = groupAdmins?.includes(senderJid) || false;
+		const groupAdmins = isGroup ? getGroupAdmins(groupMetadata.participants) : [];
+		const isGroupAdmin = groupAdmins.some(adminJid => areJidsSameUser(adminJid, senderJid));
+		const isBotAdmin = groupAdmins.some(adminJid => 
+			areJidsSameUser(adminJid, sock?.user?.id) || 
+			(sock?.user?.lid && areJidsSameUser(adminJid, sock.user.lid))
+		);
 
 		//--------------------------------------------CHAT-BOT-FEATURE------------------------------------------------//
 		const isChatBotOn = groupData ? groupData.isChatBotOn : false;
@@ -397,18 +443,38 @@ const getCommand = async (sock, msg, cache) => {
 			let tagMessage = null;
 			if (type == "extendedTextMessage") {
 				let tagMessageSenderJID = msg.message?.extendedTextMessage?.contextInfo?.participant;
-				isTaggedBot = tagMessageSenderJID === botNumber[0] || tagMessageSenderJID === botNumber[1];
+				
+				let normalizedParticipant = tagMessageSenderJID;
+				if (tagMessageSenderJID && tagMessageSenderJID.includes("@lid")) {
+					normalizedParticipant = (await getPNFromLID(sock, tagMessageSenderJID)) || tagMessageSenderJID;
+				}
+
+				isTaggedBot =
+					normalizedParticipant &&
+					(extractPhoneNumber(normalizedParticipant) === extractPhoneNumber(botNumber[0]) ||
+						(botNumber[1] && extractPhoneNumber(normalizedParticipant) === extractPhoneNumber(botNumber[1])));
+
 				tagMessage = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
 			}
-			if (
-				body.split(" ")[0].toLowerCase() == "eva" ||
-				(isTaggedBot &&
-					Object.keys(tagMessage)[0] == "conversation" &&
-					tagMessage?.conversation.startsWith("_*Eva:*_"))
-			) {
-				commandsPublic["eva"](sock, msg, from, args, {
+			
+			const quotedText = tagMessage?.conversation || tagMessage?.extendedTextMessage?.text || "";
+			const isExplicitCommand = body.split(" ")[0].toLowerCase() == "tars";
+			const isTarsConversationalReply = isTaggedBot && quotedText.startsWith("_*TARS:*_");
+			const isGeminiConversationalReply = isTaggedBot && quotedText.startsWith("_*Gemini:*_");
+
+			if (isExplicitCommand || isTarsConversationalReply || isGeminiConversationalReply) {
+				const activeFeature = (isExplicitCommand || isTarsConversationalReply) ? "tars" : "gemini";
+				const isFeatureEnabled = await getFeatureState(from, activeFeature);
+				if (!isFeatureEnabled) {
+					if (isExplicitCommand) {
+						return sendMessageWTyping(from, { text: `🚫 The *TARS* feature is currently disabled in this group.` }, { quoted: msg });
+					}
+					return;
+				}
+
+				(commandsPublic[activeFeature] || commandsMembers[activeFeature])(sock, msg, from, args, {
 					sendMessageWTyping,
-					command,
+					command: activeFeature,
 					updateName:
 						updateName == "" || updateName == null || updateName == undefined
 							? senderData?.username
@@ -418,19 +484,21 @@ const getCommand = async (sock, msg, cache) => {
 					groupMetadata,
 					groupAdmins,
 					isGroup,
-					evv,
+					evv: isExplicitCommand ? evv : body.trim(),
 					isOwner,
+					isBotMessageId: (chatId, id) => id && chatId ? outgoingMessageCache.has(`${chatId}:${id}`) : false,
 				});
 				notifyOwner(
 					sock,
 					`🤖 <b>Command Used</b>\n` +
 						`━━━━━━━━━━━━━━\n` +
-						`📌 <b>Command:</b> <code>chat</code>\n` +
+						`📌 <b>Command:</b> <code>chat (${activeFeature})</code>\n` +
 						`👤 <b>User:</b> ${escapeHtml(msg.pushName)}\n` +
 						`📱 <b>ID:</b> <code>${escapeHtml(senderJid)}</code>\n` +
 						`💬 <b>In:</b> ${escapeHtml(groupMetadata.subject)}`,
 					msg,
 				);
+				return;
 			}
 		}
 		//---------------------------------------------------NO-CMD----------------------------------------------------//
@@ -455,6 +523,7 @@ const getCommand = async (sock, msg, cache) => {
 			groupMetadata,
 			groupAdmins,
 			isGroupAdmin,
+			isBotAdmin,
 			botNumber,
 			sendMessageWTyping,
 			notifyOwner,
@@ -463,10 +532,9 @@ const getCommand = async (sock, msg, cache) => {
 			isOwner,
 			startTime,
 			extendedMessageOriginal,
+			isBotMessageId: (chatId, id) => id && chatId ? outgoingMessageCache.has(`${chatId}:${id}`) : false,
 		};
-		const displayFrom = senderJid.endsWith("@s.whatsapp.net")
-			? extractPhoneNumber(senderJid)
-			: extractPhoneNumber((await Promise.resolve(getPNFromLID(sock, senderJid))) || senderJid);
+		const displayFrom = extractPhoneNumber(senderJid);
 		console.log(
 			"[COMMAND]",
 			command,
@@ -511,6 +579,19 @@ const getCommand = async (sock, msg, cache) => {
 				}
 			}
 		}
+
+		if (isGroup && command !== "") {
+			for (const [featureName, aliases] of Object.entries(FEATURE_MAP)) {
+				if (aliases.includes(command)) {
+					const isEnabled = await getFeatureState(from, featureName);
+					if (!isEnabled) {
+						return sendMessageWTyping(from, { text: `🚫 The *${featureName}* feature is currently disabled in this group.` }, { quoted: msg });
+					}
+					break; // Found the matching feature, no need to check other features
+				}
+			}
+		}
+
 		// Track command usage for admin dashboard
 		const { pushActivity, cmdUsage } = await import("../notify/adminEvents.js");
 		if (commandsPublic[command] || commandsMembers[command] || commandsAdmins[command] || commandsOwners[command]) {
@@ -524,15 +605,18 @@ const getCommand = async (sock, msg, cache) => {
 		}
 		if (commandsPublic[command]) {
 			const t0 = Date.now();
+			msgInfoObj.effectiveScope = "public";
 			const result = await commandsPublic[command](sock, msg, from, args, msgInfoObj);
 			const t1 = Date.now();
 			console.log(`[PROFILE] Command '${command}' (public) took ${t1 - t0}ms`);
 			return result;
 		} else if (commandsMembers[command]) {
 			const t0 = Date.now();
+			msgInfoObj.effectiveScope = "group";
 			let result;
+			const handler = commandsMembers[command];
 			if (isGroup || msg.key.fromMe) {
-				result = await commandsMembers[command](sock, msg, from, args, msgInfoObj);
+				result = await handler(sock, msg, from, args, msgInfoObj);
 			} else {
 				result = await sendMessageWTyping(
 					from,
@@ -545,6 +629,7 @@ const getCommand = async (sock, msg, cache) => {
 			return result;
 		} else if (commandsAdmins[command]) {
 			const t0 = Date.now();
+			msgInfoObj.effectiveScope = "admin";
 			let result;
 			if (!isGroup) {
 				result = await sendMessageWTyping(
@@ -552,29 +637,47 @@ const getCommand = async (sock, msg, cache) => {
 					{ text: "```❎ This command is only applicable in Groups!```" },
 					{ quoted: msg },
 				);
-			} else if (isGroupAdmin || moderatos.includes(senderNumber) || myNumber.includes(senderJid)) {
-				result = await commandsAdmins[command](sock, msg, from, args, msgInfoObj);
 			} else {
-				result = await sendMessageWTyping(
-					from,
-					{ text: "```🤭 kya matlab tum admin nhi ho.```" },
-					{ quoted: msg },
-				);
+				let isAuthorized = isGroupAdmin || moderatos.includes(senderNumber) || isOwner;
+				if (!isAuthorized) isAuthorized = await verifyOwner(sock, senderJid);
+				
+				if (isAuthorized) {
+					result = await commandsAdmins[command](sock, msg, from, args, msgInfoObj);
+				} else {
+					result = await sendMessageWTyping(
+						from,
+						{ text: "```🤭 kya matlab tum admin nhi ho.```" },
+						{ quoted: msg },
+					);
+				}
 			}
 			const t1 = Date.now();
 			console.log(`[PROFILE] Command '${command}' (admins) took ${t1 - t0}ms`);
 			return result;
 		} else if (commandsOwners[command]) {
 			const t0 = Date.now();
+			msgInfoObj.effectiveScope = "owner";
 			let result;
-			if (moderatos.includes(senderNumber) || myNumber.includes(senderJid)) {
-				result = await commandsOwners[command](sock, msg, from, args, msgInfoObj);
-			} else {
+
+			if (!isGroup && !msg.key.fromMe && command !== "setcommand" && command !== "resetcommand") {
 				result = await sendMessageWTyping(
 					from,
-					{ text: "```🤭 kya matlab tum mere owner nhi ho.```" },
+					{ text: "```❎ This command is only applicable in Groups!```" },
 					{ quoted: msg },
 				);
+			} else {
+				let isAuthorized = moderatos.includes(senderNumber) || isOwner;
+				if (!isAuthorized) isAuthorized = await verifyOwner(sock, senderJid);
+				
+				if (isAuthorized) {
+					result = await commandsOwners[command](sock, msg, from, args, msgInfoObj);
+				} else {
+					result = await sendMessageWTyping(
+						from,
+						{ text: "```🤭 kya matlab tum mere owner nhi ho.```" },
+						{ quoted: msg },
+					);
+				}
 			}
 			const t1 = Date.now();
 			console.log(`[PROFILE] Command '${command}' (owners) took ${t1 - t0}ms`);
