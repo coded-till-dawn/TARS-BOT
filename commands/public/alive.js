@@ -51,8 +51,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 		`*⏱️ Uptime:* ${simpleUptime}\n` +
 		`*🧠 RAM:* ${usedMB} MB\n\n` +
 		`*── Connections ──*\n` +
-		`${st(mongoOk)} *MongoDB*\n` +
-		`${st(redisResult)} *Redis*${redisResult === null ? " _(disabled)_" : ""}\n\n` +
+		`${st(mongoOk)} *MongoDB*\n\n` +
 		`*🛠️ Node.js:* ${process.version}`;
 
 	return sendMessageWTyping(from, { text: response }, { quoted: msg });
