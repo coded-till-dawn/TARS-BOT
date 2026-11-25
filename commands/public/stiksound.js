@@ -68,7 +68,7 @@ const handler = async (sock, msg, from, _args, info) => {
 		const options = { timeout: 30000, killSignal: "SIGKILL" };
 		await run(ffmpeg, [
 			...inputOptions,
-			"-map", "0:a:0", "-t", stickerDurationSeconds, "-c:a", "libopus", "-ac", "1", "-b:a", "64k", audio,
+			"-map", "0:a:0", "-af", "asetpts=N/SR/TB", "-t", stickerDurationSeconds, "-c:a", "libopus", "-ac", "1", "-b:a", "64k", audio,
 		], options);
 
 		stage = "animation encode";
