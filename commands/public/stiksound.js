@@ -2,25 +2,37 @@ import { sendSoundSticker } from "../../utils/soundSticker.js";
 import { downloadContentFromMessage, prepareWAMessageMedia } from "baileys";
 import ffmpegPath from "ffmpeg-static";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const stickerDurationSeconds = "10";
-const maxMediaBytes = 10 * 1024 * 1024;
+const maxVideoMiB = 32;
+const maxMediaBytes = maxVideoMiB * 1024 * 1024;
+const maxStickerBytes = 990 * 1024;
+const stickerProfiles = [
+	{ fps: 12, quality: 45 },
+	{ fps: 12, quality: 30 },
+	{ fps: 8, quality: 25 },
+	{ fps: 6, quality: 15 },
+];
 let activeJobs = 0;
 
-async function readLimited(stream, limit) {
-	const chunks = [];
+async function* limitDownload(stream) {
 	let size = 0;
 	for await (const chunk of stream) {
 		size += chunk.length;
-		if (size > limit) throw new Error("Media exceeds the download limit");
-		chunks.push(chunk);
+		if (size > maxMediaBytes) {
+			const error = new Error("Video exceeds the download limit");
+			error.code = "SOS_VIDEO_TOO_LARGE";
+			throw error;
+		}
+		yield chunk;
 	}
-	return Buffer.concat(chunks);
 }
 
 const handler = async (sock, msg, from, _args, info) => {
@@ -45,21 +57,35 @@ const handler = async (sock, msg, from, _args, info) => {
 		const sticker = join(directory, "sticker.webp");
 		const audio = join(directory, "audio.ogg");
 		const stream = await downloadContentFromMessage(video, "video");
-		await writeFile(input, await readLimited(stream, maxMediaBytes));
+		await pipeline(stream, limitDownload, createWriteStream(input), { signal: AbortSignal.timeout(60000) });
 
 		stage = "encode";
-		await run(process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg", [
-			"-nostdin", "-v", "error", "-xerror", "-filter_threads", "1",
+		const ffmpeg = process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg";
+		const inputOptions = [
+			"-nostdin", "-v", "error", "-xerror", "-filter_threads", "1", "-y",
 			"-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-i", input,
+		];
+		const options = { timeout: 30000, killSignal: "SIGKILL" };
+		await run(ffmpeg, [
+			...inputOptions,
 			"-map", "0:a:0", "-t", stickerDurationSeconds, "-c:a", "libopus", "-ac", "1", "-b:a", "64k", audio,
-			"-map", "0:v:0", "-t", stickerDurationSeconds,
-			"-vf", "fps=12,scale=512:512:force_original_aspect_ratio=increase,crop=512:512,setsar=1",
-			"-c:v", "libwebp_anim", "-pix_fmt", "yuv420p", "-q:v", "45", "-loop", "0", sticker,
-		], { timeout: 30000, killSignal: "SIGKILL" });
+		], options);
 
-		const webp = await readFile(sticker);
-		if (webp.length > 990 * 1024) {
-			return reply({ text: "The animated sticker is too large. Try a shorter clip." });
+		let webp;
+		for (const { fps, quality } of stickerProfiles) {
+			await run(ffmpeg, [
+				...inputOptions,
+				"-map", "0:v:0", "-t", stickerDurationSeconds,
+				"-vf", `fps=${fps},scale=512:512:force_original_aspect_ratio=increase,crop=512:512,setsar=1`,
+				"-c:v", "libwebp_anim", "-pix_fmt", "yuv420p", "-q:v", String(quality), "-loop", "0", sticker,
+			], options);
+			if ((await stat(sticker)).size <= maxStickerBytes) {
+				webp = await readFile(sticker);
+				break;
+			}
+		}
+		if (!webp) {
+			return reply({ text: "The animated sticker is still too large after compression. Try a shorter clip." });
 		}
 		stage = "upload or relay";
 		const { audioMessage } = await prepareWAMessageMedia({
@@ -74,9 +100,12 @@ const handler = async (sock, msg, from, _args, info) => {
 		console.info(`[SOS] Sticker relay returned (message ID: ${messageId}).`);
 	} catch (error) {
 		console.warn(`[SOS] Failed during ${stage} (${error.code ?? error.name ?? "unknown error"}).`);
-		const text = error.stderr?.includes("matches no streams")
-			? "This video has no audio track. Send a video with sound."
-			: "Could not create or send the sound sticker. Send a playable video under 10 MB.";
+		let text = "Could not create or send the sound sticker. Try a playable video.";
+		if (error.code === "SOS_VIDEO_TOO_LARGE") {
+			text = `The video exceeds ${maxVideoMiB} MiB. Send a smaller video.`;
+		} else if (error.stderr?.includes("matches no streams")) {
+			text = "This video is missing an audio or video track. Send a video with sound.";
+		}
 		await reply({ text });
 	} finally {
 		activeJobs--;
