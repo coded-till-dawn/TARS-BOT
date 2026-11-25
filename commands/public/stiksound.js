@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+const stickerDurationSeconds = "10";
 const maxMediaBytes = 10 * 1024 * 1024;
 let activeJobs = 0;
 
@@ -86,8 +87,8 @@ const handler = async (sock, msg, from, _args, info) => {
 		await run(process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg", [
 			"-nostdin", "-v", "error", "-xerror", "-filter_threads", "1",
 			"-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-i", input,
-			"-map", "0:a:0", "-t", "5", "-c:a", "libopus", "-ac", "1", "-b:a", "64k", audio,
-			"-map", "0:v:0", "-t", "5",
+			"-map", "0:a:0", "-t", stickerDurationSeconds, "-c:a", "libopus", "-ac", "1", "-b:a", "64k", audio,
+			"-map", "0:v:0", "-t", stickerDurationSeconds,
 			"-vf", "fps=12,scale=512:512:force_original_aspect_ratio=increase,crop=512:512,setsar=1",
 			"-c:v", "libwebp_anim", "-pix_fmt", "yuv420p", "-q:v", "45", "-loop", "0", sticker,
 		], { timeout: 30000, killSignal: "SIGKILL" });
@@ -112,7 +113,7 @@ const handler = async (sock, msg, from, _args, info) => {
 
 export default () => ({
 	cmd: ["sos"],
-	desc: "Try sending a WhatsApp sticker with the video’s original audio.",
+	desc: "Create a sound sticker from up to 10 seconds of a video and its original audio.",
 	usage: "sos | reply to a video or use as its caption",
 	handler,
 });
