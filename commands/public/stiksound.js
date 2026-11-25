@@ -22,61 +22,23 @@ async function readLimited(stream, limit) {
 	return Buffer.concat(chunks);
 }
 
+const encodeSticker = proto.Message.StickerMessage.encode;
 let protoPatched = false;
+
 function ensureAudioStickerProtoSupport() {
-  if (protoPatched) return;
-  protoPatched = true;
+	const { StickerMessage, AudioMessage } = proto.Message;
+	if ("audioMessage" in StickerMessage.prototype || protoPatched) return;
 
-  const StickerProto = proto?.Message?.StickerMessage;
-  const AudioProto = proto?.Message?.AudioMessage;
-  const FutureProofProto = proto?.Message?.FutureProofMessage;
-  const MsgProto = proto?.Message;
+	StickerMessage.encode = encodeStickerWithAudio;
+	protoPatched = true;
 
-  if (!StickerProto || !AudioProto || !MsgProto) return;
-
-  // 1. Patch StickerMessage.audioMessage (field 26, wireType 2 -> tag 210)
-  if (!("audioMessage" in StickerProto.prototype)) {
-    const origStickerFromObj = StickerProto.fromObject.bind(StickerProto);
-    const origStickerEncode = StickerProto.encode.bind(StickerProto);
-
-    StickerProto.fromObject = function (object) {
-      const msg = origStickerFromObj(object);
-      if (object && object.audioMessage != null) {
-        msg.audioMessage = AudioProto.fromObject(object.audioMessage);
-      }
-      return msg;
-    };
-
-    StickerProto.encode = function (message, writer) {
-      const w = origStickerEncode(message, writer);
-      if (message && message.audioMessage != null) {
-        AudioProto.encode(message.audioMessage, w.uint32(210).fork()).ldelim();
-      }
-      return w;
-    };
-  }
-
-  // 2. Patch Message.audioStickerMessage (field 134, FutureProofMessage, wireType 2 -> tag 1074)
-  if (FutureProofProto && !("audioStickerMessage" in MsgProto.prototype)) {
-    const origMsgFromObj = MsgProto.fromObject.bind(MsgProto);
-    const origMsgEncode = MsgProto.encode.bind(MsgProto);
-
-    MsgProto.fromObject = function (object) {
-      const msg = origMsgFromObj(object);
-      if (object && object.audioStickerMessage != null) {
-        msg.audioStickerMessage = FutureProofProto.fromObject(object.audioStickerMessage);
-      }
-      return msg;
-    };
-
-    MsgProto.encode = function (message, writer) {
-      const w = origMsgEncode(message, writer);
-      if (message && message.audioStickerMessage != null) {
-        FutureProofProto.encode(message.audioStickerMessage, w.uint32(1074).fork()).ldelim();
-      }
-      return w;
-    };
-  }
+	function encodeStickerWithAudio(message, writer) {
+		const output = encodeSticker(message, writer);
+		if (message.audioMessage) {
+			AudioMessage.encode(message.audioMessage, output.uint32(210).fork()).ldelim();
+		}
+		return output;
+	}
 }
 
 async function sendSoundSticker(sock, jid, sticker, audio) {
@@ -91,13 +53,9 @@ async function sendSoundSticker(sock, jid, sticker, audio) {
 	stickerMessage.audioMessage = sound.audioMessage;
 
 	ensureAudioStickerProtoSupport();
-	const message = proto.Message.fromObject({
-		audioStickerMessage: { message: { stickerMessage } },
-	});
-	await sock.relayMessage(jid, message, {
-		messageId: "3EB0" + randomBytes(18).toString("hex").toUpperCase(),
-		additionalAttributes: { type: "media" },
-	});
+	const messageId = "3EB0" + randomBytes(18).toString("hex").toUpperCase();
+	await sock.relayMessage(jid, { stickerMessage }, { messageId });
+	console.info(`[SOS] Sticker relay returned (message ID: ${messageId}).`);
 }
 
 const handler = async (sock, msg, from, _args, info) => {
@@ -115,6 +73,7 @@ const handler = async (sock, msg, from, _args, info) => {
 
 	activeJobs++;
 	let directory;
+	let stage = "download";
 	try {
 		directory = await mkdtemp(join(tmpdir(), "tars-stiksound-"));
 		const input = join(directory, "input");
@@ -123,6 +82,7 @@ const handler = async (sock, msg, from, _args, info) => {
 		const stream = await downloadContentFromMessage(video, "video");
 		await writeFile(input, await readLimited(stream, maxMediaBytes));
 
+		stage = "encode";
 		await run(process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg", [
 			"-nostdin", "-v", "error", "-xerror", "-filter_threads", "1",
 			"-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,webm", "-i", input,
@@ -136,8 +96,10 @@ const handler = async (sock, msg, from, _args, info) => {
 		if (webp.length > 990 * 1024) {
 			return reply({ text: "The animated sticker is too large. Try a shorter clip." });
 		}
+		stage = "upload or relay";
 		await sendSoundSticker(sock, from, webp, await readFile(audio));
 	} catch (error) {
+		console.warn(`[SOS] Failed during ${stage} (${error.code ?? error.name ?? "unknown error"}).`);
 		const text = error.stderr?.includes("matches no streams")
 			? "This video has no audio track. Send a video with sound."
 			: "Could not create or send the sound sticker. Send a playable video under 10 MB.";
