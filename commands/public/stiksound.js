@@ -67,7 +67,7 @@ const handler = async (_sock, msg, from, args, info) => {
 	const quoted = context?.quotedMessage;
 	const [visual, type] = visualFrom(current?.imageMessage || current?.videoMessage ? current : quoted);
 	const reply = (content) => info.sendMessageWTyping(from, content, { quoted: msg });
-	const command = `${info.prefix}stiksound`;
+	const command = `${info.prefix}sos`;
 	const audio = quoted?.audioMessage;
 
 	if (!visual || args.length > 1 || (!args[0] && !audio)) {
@@ -110,8 +110,8 @@ const handler = async (_sock, msg, from, args, info) => {
 };
 
 export default () => ({
-	cmd: ["stiksound"],
+	cmd: ["sos"],
 	desc: "Make a short square video from a sticker or other media and a sound.",
-	usage: "stiksound <MyInstants link> | reply to media",
+	usage: "sos <MyInstants link> | reply to media",
 	handler,
 });
