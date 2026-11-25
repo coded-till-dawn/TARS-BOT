@@ -1,3 +1,4 @@
+import { rememberSoundSticker } from "../utils/soundSticker.js";
 import NodeCache from "node-cache";
 import makeWASocket, { makeCacheableSignalKeyStore } from "baileys";
 import { fetchLatestBaileysVersion } from "baileys";
@@ -86,6 +87,7 @@ const socket = async () => {
 		try {
 			for (const msg of m.messages) {
 				if (msg.message) {
+					rememberSoundSticker(msg.key.remoteJid, msg.key.id, msg.message.stickerMessage);
 					const cacheKey = `${msg.key.remoteJid}:${msg.key.id}`;
 					// Only cache if under limit to prevent memory overflow (must stay < maxKeys or .set() throws ECACHEFULL)
 					if (messageCache.getStats().keys < 180) {
