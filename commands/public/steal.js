@@ -1,3 +1,4 @@
+import { sendSoundSticker } from "../../utils/soundSticker.js";
 import { getMemberData } from "../../db/members.js";
 import { downloadContentFromMessage } from "baileys";
 import WSF from "wa-sticker-formatter";
@@ -34,17 +35,24 @@ async function addExifNodeWebpmux(buffer, pack, author) {
 }
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
-	const { evv, type, content, sendMessageWTyping, senderJid, command, extendedMessageOriginal } = msgInfoObj;
+	const { evv, type, sendMessageWTyping, senderJid, command, extendedMessageOriginal } = msgInfoObj;
 	const memberData = await getMemberData(senderJid);
 
-	if (type === "extendedTextMessage" && content.includes("stickerMessage")) {
+	const sticker = extendedMessageOriginal?.quotedMessage?.stickerMessage;
+	if (type === "extendedTextMessage" && sticker) {
+		const sendSticker = async (buffer) => {
+			if (sticker.audioMessage) {
+				const { width, height, isAnimated } = sticker;
+				return sendSoundSticker(sock, from, buffer, sticker.audioMessage, { width, height, isAnimated });
+			}
+			return sendMessageWTyping(from, { sticker: buffer }, { quoted: msg });
+		};
 		let packName = "TARS";
 		let authorName = "jacktheboss220";
 		if (args.includes("pack")) packName = args.join(" ").split("pack ")[1]?.split("author")[0] || packName;
 		if (args.includes("author")) authorName = args.join(" ").split("author ")[1]?.split("pack")[0] || authorName;
 
-		const downloadFilePath = extendedMessageOriginal?.quotedMessage?.stickerMessage;
-		const stream = await downloadContentFromMessage(downloadFilePath, "sticker");
+		const stream = await downloadContentFromMessage(sticker, "sticker");
 		const chunks = [];
 		for await (const chunk of stream) chunks.push(chunk);
 		const buffer = Buffer.concat(chunks);
@@ -54,6 +62,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 
 		const packOrAuthor = args.includes("pack") || args.includes("author");
 
+		let stickerBuffer = buffer;
 		try {
 			const webpWithMetadata =
 				command === "stealn"
@@ -69,7 +78,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 								: "jacktheboss220",
 							media,
 					  );
-			await sendMessageWTyping(from, { sticker: Buffer.from(webpWithMetadata) }, { quoted: msg });
+			stickerBuffer = Buffer.from(webpWithMetadata);
 		} catch (error) {
 			// webpmux fails on animated/lossless WebP — retry with node-webpmux (pure JS/Wasm)
 			try {
@@ -77,16 +86,16 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				const finalAuthor = packOrAuthor
 					? authorName
 					: evv ? "" : memberData?.customStealText ? undefined : "jacktheboss220";
-				const stickerBuf = command === "stealn"
+				stickerBuffer = command === "stealn"
 					? buffer
 					: await addExifNodeWebpmux(buffer, finalPack, finalAuthor);
-				await sendMessageWTyping(from, { sticker: stickerBuf }, { quoted: msg });
 			} catch (err2) {
-				await sendMessageWTyping(from, { sticker: buffer }, { quoted: msg });
+				stickerBuffer = buffer;
 			}
 		} finally {
 			fs.promises.unlink(media).catch(() => {});
 		}
+		return sendSticker(stickerBuffer);
 	} else {
 		return sendMessageWTyping(from, { text: `❌ *Reply on Sticker*` }, { quoted: msg });
 	}
