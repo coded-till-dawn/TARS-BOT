@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import NodeCache from "node-cache";
 import { prepareWAMessageMedia, proto } from "baileys";
 
 const { StickerMessage, AudioMessage } = proto.Message;
@@ -44,10 +45,26 @@ if (!("audioMessage" in StickerMessage.prototype)) {
 	};
 }
 
+const recentSoundStickers = new NodeCache({ stdTTL: 3600, checkperiod: 300, useClones: false });
+
+export function rememberSoundSticker(jid, messageId, sticker) {
+	if (!jid || !messageId || !sticker?.audioMessage) return;
+	const key = `${jid}:${messageId}`;
+	if (!recentSoundStickers.has(key) && recentSoundStickers.getStats().keys >= 300) {
+		recentSoundStickers.del(recentSoundStickers.keys()[0]);
+	}
+	recentSoundStickers.set(key, sticker);
+}
+
+export function findSoundSticker(jid, messageId) {
+	return recentSoundStickers.get(`${jid}:${messageId}`);
+}
+
 export async function sendSoundSticker(sock, jid, sticker, audioMessage, dimensions) {
 	const { stickerMessage } = await prepareWAMessageMedia({ sticker }, { upload: sock.waUploadToServer });
 	Object.assign(stickerMessage, dimensions, { audioMessage });
 	const messageId = "3EB0" + randomBytes(18).toString("hex").toUpperCase();
 	await sock.relayMessage(jid, { stickerMessage }, { messageId });
+	rememberSoundSticker(jid, messageId, stickerMessage);
 	return messageId;
 }

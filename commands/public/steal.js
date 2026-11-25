@@ -1,4 +1,4 @@
-import { sendSoundSticker } from "../../utils/soundSticker.js";
+import { findSoundSticker, sendSoundSticker } from "../../utils/soundSticker.js";
 import { getMemberData } from "../../db/members.js";
 import { downloadContentFromMessage } from "baileys";
 import WSF from "wa-sticker-formatter";
@@ -38,7 +38,9 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 	const { evv, type, sendMessageWTyping, senderJid, command, extendedMessageOriginal } = msgInfoObj;
 	const memberData = await getMemberData(senderJid);
 
-	const sticker = extendedMessageOriginal?.quotedMessage?.stickerMessage;
+	const quotedSticker = extendedMessageOriginal?.quotedMessage?.stickerMessage;
+	const originalSticker = findSoundSticker(from, extendedMessageOriginal?.stanzaId);
+	const sticker = quotedSticker?.audioMessage ? quotedSticker : originalSticker ?? quotedSticker;
 	if (type === "extendedTextMessage" && sticker) {
 		const sendSticker = async (buffer) => {
 			if (sticker.audioMessage) {
