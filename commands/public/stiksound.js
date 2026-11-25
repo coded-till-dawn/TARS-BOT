@@ -59,7 +59,7 @@ const handler = async (sock, msg, from, _args, info) => {
 		const stream = await downloadContentFromMessage(video, "video");
 		await pipeline(stream, limitDownload, createWriteStream(input), { signal: AbortSignal.timeout(60000) });
 
-		stage = "encode";
+		stage = "audio encode";
 		const ffmpeg = process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg";
 		const inputOptions = [
 			"-nostdin", "-v", "error", "-xerror", "-filter_threads", "1", "-y",
@@ -71,6 +71,7 @@ const handler = async (sock, msg, from, _args, info) => {
 			"-map", "0:a:0", "-t", stickerDurationSeconds, "-c:a", "libopus", "-ac", "1", "-b:a", "64k", audio,
 		], options);
 
+		stage = "animation encode";
 		let webp;
 		for (const { fps, quality } of stickerProfiles) {
 			await run(ffmpeg, [
@@ -100,6 +101,9 @@ const handler = async (sock, msg, from, _args, info) => {
 		console.info(`[SOS] Sticker relay returned (message ID: ${messageId}).`);
 	} catch (error) {
 		console.warn(`[SOS] Failed during ${stage} (${error.code ?? error.name ?? "unknown error"}).`);
+		if (error.stderr) {
+			console.warn(`[SOS] FFmpeg: ${String(error.stderr).trim().slice(-1500)}`);
+		}
 		let text = "Could not create or send the sound sticker. Try a playable video.";
 		if (error.code === "SOS_VIDEO_TOO_LARGE") {
 			text = `The video exceeds ${maxVideoMiB} MiB. Send a smaller video.`;
