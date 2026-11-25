@@ -1,3 +1,4 @@
+import "./utils/soundSticker.js";
 import NodeCache from "node-cache";
 
 // Optimized cache with TTL and memory management

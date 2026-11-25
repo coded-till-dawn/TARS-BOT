@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { downloadContentFromMessage, prepareWAMessageMedia, proto } from "baileys";
+import { sendSoundSticker } from "../../utils/soundSticker.js";
+import { downloadContentFromMessage, prepareWAMessageMedia } from "baileys";
 import ffmpegPath from "ffmpeg-static";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -21,42 +21,6 @@ async function readLimited(stream, limit) {
 		chunks.push(chunk);
 	}
 	return Buffer.concat(chunks);
-}
-
-const encodeSticker = proto.Message.StickerMessage.encode;
-let protoPatched = false;
-
-function ensureAudioStickerProtoSupport() {
-	const { StickerMessage, AudioMessage } = proto.Message;
-	if ("audioMessage" in StickerMessage.prototype || protoPatched) return;
-
-	StickerMessage.encode = encodeStickerWithAudio;
-	protoPatched = true;
-
-	function encodeStickerWithAudio(message, writer) {
-		const output = encodeSticker(message, writer);
-		if (message.audioMessage) {
-			AudioMessage.encode(message.audioMessage, output.uint32(210).fork()).ldelim();
-		}
-		return output;
-	}
-}
-
-async function sendSoundSticker(sock, jid, sticker, audio) {
-	const [visual, sound] = await Promise.all([
-		prepareWAMessageMedia({ sticker }, { upload: sock.waUploadToServer }),
-		prepareWAMessageMedia({ audio, mimetype: "audio/ogg; codecs=opus" }, { upload: sock.waUploadToServer }),
-	]);
-	const stickerMessage = visual.stickerMessage;
-	stickerMessage.isAnimated = sticker.includes(Buffer.from("ANIM"), 12);
-	stickerMessage.width = 512;
-	stickerMessage.height = 512;
-	stickerMessage.audioMessage = sound.audioMessage;
-
-	ensureAudioStickerProtoSupport();
-	const messageId = "3EB0" + randomBytes(18).toString("hex").toUpperCase();
-	await sock.relayMessage(jid, { stickerMessage }, { messageId });
-	console.info(`[SOS] Sticker relay returned (message ID: ${messageId}).`);
 }
 
 const handler = async (sock, msg, from, _args, info) => {
@@ -98,7 +62,16 @@ const handler = async (sock, msg, from, _args, info) => {
 			return reply({ text: "The animated sticker is too large. Try a shorter clip." });
 		}
 		stage = "upload or relay";
-		await sendSoundSticker(sock, from, webp, await readFile(audio));
+		const { audioMessage } = await prepareWAMessageMedia({
+			audio: await readFile(audio),
+			mimetype: "audio/ogg; codecs=opus",
+		}, { upload: sock.waUploadToServer });
+		const messageId = await sendSoundSticker(sock, from, webp, audioMessage, {
+			width: 512,
+			height: 512,
+			isAnimated: webp.includes(Buffer.from("ANIM"), 12),
+		});
+		console.info(`[SOS] Sticker relay returned (message ID: ${messageId}).`);
 	} catch (error) {
 		console.warn(`[SOS] Failed during ${stage} (${error.code ?? error.name ?? "unknown error"}).`);
 		const text = error.stderr?.includes("matches no streams")
