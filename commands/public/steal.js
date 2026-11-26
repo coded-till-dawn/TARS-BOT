@@ -40,12 +40,20 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 
 	const quotedSticker = getSoundSticker(extendedMessageOriginal?.quotedMessage);
 	const originalSticker = findSoundSticker(from, extendedMessageOriginal?.stanzaId, quotedSticker);
-	const sticker = quotedSticker?.audioMessage ? quotedSticker : originalSticker ?? quotedSticker;
+	const sticker = originalSticker ?? quotedSticker;
+	const audio = sticker?.audioMessage;
+	const hasAudio = Boolean(audio?.mediaKey?.length && (audio.directPath || audio.url));
 	if (type === "extendedTextMessage" && sticker) {
 		const sendSticker = async (buffer) => {
-			if (sticker.audioMessage) {
+			console.info(`[STEAL] Sticker source: ${originalSticker ? "cache" : "quote"}; audio: ${hasAudio ? "available" : audio ? "incomplete" : "missing"}.`);
+			if (hasAudio) {
 				const { width, height, isAnimated } = sticker;
-				return sendSoundSticker(sock, from, buffer, sticker.audioMessage, { width, height, isAnimated });
+				const messageId = await sendSoundSticker(sock, from, buffer, audio, { width, height, isAnimated });
+				console.info(`[STEAL] Sound sticker relay returned (message ID: ${messageId}).`);
+				return;
+			}
+			if (audio) {
+				return sendMessageWTyping(from, { text: "The quoted sticker has incomplete audio details. Reply directly to the original sound sticker." }, { quoted: msg });
 			}
 			return sendMessageWTyping(from, { sticker: buffer }, { quoted: msg });
 		};
