@@ -5,6 +5,7 @@ import { normalizeMessageContent, prepareWAMessageMedia, proto } from "baileys";
 const { Message } = proto;
 const { StickerMessage, AudioMessage, FutureProofMessage } = Message;
 const audioTag = 210; // StickerMessage field 26, length-delimited.
+const receivedStickerFields = new WeakMap();
 const audioStickerTag = 1074; // Message field 134, length-delimited.
 
 function decodeWithAttachment(MessageType, field, fieldTag, AttachmentType) {
@@ -16,6 +17,7 @@ function decodeWithAttachment(MessageType, field, fieldTag, AttachmentType) {
 		const message = decode(input, length, endTag);
 		const bytes = isReader ? input.buf.subarray(start, input.pos) : input.subarray(0, length);
 		let offset = 0;
+		const fields = MessageType === StickerMessage ? new Set() : undefined;
 		const readVarint = () => {
 			let value = 0;
 			for (let shift = 0; offset < bytes.length && shift < 49; shift += 7) {
@@ -27,11 +29,11 @@ function decodeWithAttachment(MessageType, field, fieldTag, AttachmentType) {
 		};
 		while (offset < bytes.length) {
 			const tag = readVarint();
+			if (Number.isFinite(tag)) fields?.add(Math.floor(tag / 8));
 			if (tag % 8 === 2) {
 				const size = readVarint();
 				if (tag === fieldTag && size <= bytes.length - offset) {
 					message[field] = AttachmentType.decode(bytes.subarray(offset, offset + size));
-					break;
 				}
 				offset += size;
 			} else if (tag % 8 === 0) {
@@ -44,6 +46,7 @@ function decodeWithAttachment(MessageType, field, fieldTag, AttachmentType) {
 				break;
 			}
 		}
+		if (fields) receivedStickerFields.set(message, fields);
 		return message;
 	};
 }
@@ -72,7 +75,12 @@ export function getSoundSticker(content) {
 const recentSoundStickers = new NodeCache({ stdTTL: 3600, checkperiod: 300, useClones: false });
 
 export function rememberSoundSticker(jid, messageId, sticker) {
-	if (!jid || !messageId || !sticker?.audioMessage) return;
+	if (!jid || !messageId || !sticker) return;
+	const fields = receivedStickerFields.get(sticker);
+	if (fields) {
+		console.info(`[STEAL] Received sticker ${messageId}; fields: ${[...fields].join(",")}; audio: ${sticker.audioMessage ? "present" : "missing"}.`);
+	}
+	if (!sticker.audioMessage) return;
 	const key = `${jid}:${messageId}`;
 	if (!recentSoundStickers.has(key) && recentSoundStickers.getStats().keys >= 300) {
 		recentSoundStickers.del(recentSoundStickers.keys()[0]);
@@ -82,6 +90,9 @@ export function rememberSoundSticker(jid, messageId, sticker) {
 
 export function findSoundSticker(jid, messageId, quotedSticker) {
 	const original = recentSoundStickers.get(`${jid}:${messageId}`);
+	if (quotedSticker && messageId) {
+		console.info(`[STEAL] Quoted sticker ${messageId}; original ID match: ${original ? "yes" : "no"}.`);
+	}
 	if (original || !quotedSticker) return original;
 
 	// A quote can omit either the encrypted hash or the original message ID.
