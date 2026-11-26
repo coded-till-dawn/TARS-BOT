@@ -1,6 +1,10 @@
 import { findSoundSticker, getSoundSticker, sendSoundSticker } from "../../utils/soundSticker.js";
 import { getMemberData } from "../../db/members.js";
 import { downloadContentFromMessage, normalizeMessageContent, prepareWAMessageMedia } from "baileys";
+import ffmpegPath from "ffmpeg-static";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import NodeCache from "node-cache";
 import WSF from "wa-sticker-formatter";
 import nodeWebpmux from "node-webpmux";
@@ -13,13 +17,18 @@ const getRandom = (ext) => path.join(os.tmpdir(), `${Math.floor(Math.random() * 
 
 const pendingStickers = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false });
 
-async function readMedia(message, type) {
+const run = promisify(execFile);
+const audioFileExtension = /\.(?:mp3|m4a|aac|wav|ogg|opus|flac|webm)$/i;
+const maxAudioBytes = 10 * 1024 * 1024;
+let activeAudioJobs = 0;
+
+async function readMedia(message, type, limit) {
 	const stream = await downloadContentFromMessage(message, type);
 	const chunks = [];
 	let size = 0;
 	for await (const chunk of stream) {
 		size += chunk.length;
-		if (size > 1024 * 1024) throw new Error("Sticker or voice note exceeds 1 MiB");
+		if (size > limit) throw new RangeError("Media exceeds the size limit");
 		chunks.push(chunk);
 	}
 	return Buffer.concat(chunks);
@@ -36,33 +45,46 @@ async function pairAudio(sock, msg, from, info) {
 			pendingStickers.del(pendingStickers.keys()[0]);
 		}
 		pendingStickers.set(key, sticker);
-		return reply(`Sticker selected for five minutes. Reply to an Ogg/Opus voice note of up to 10 seconds with ${command}.`);
+		return reply(`Sticker selected for five minutes. Reply to an uploaded audio file or voice note with ${command}. I’ll use the first 10 seconds.`);
 	}
 
-	const voiceNote = quoted?.audioMessage;
+	const document = quoted?.documentMessage;
+	const audioDocument = document && (/^audio\//i.test(document.mimetype ?? "") || audioFileExtension.test(document.fileName ?? ""));
+	const audioSource = quoted?.audioMessage ?? (audioDocument ? document : undefined);
 	const selectedSticker = pendingStickers.get(key);
-	if (!voiceNote || !selectedSticker) {
-		return reply(`Reply to a sticker with ${command}, then reply to a voice note with the same command.`);
+	if (!audioSource || !selectedSticker) {
+		return reply(`Reply to a sticker with ${command}, then reply to an audio file or voice note with the same command.`);
 	}
-	if (!voiceNote.seconds || voiceNote.seconds > 10 || !/^audio\/ogg(?:;|$)/i.test(voiceNote.mimetype ?? "")) {
-		return reply("Use a WhatsApp Ogg/Opus voice note of up to 10 seconds.");
-	}
+	if (activeAudioJobs >= 2) return reply("Sticker audio processing is busy. Try again in a moment.");
 
 	pendingStickers.del(key);
+	activeAudioJobs++;
+	let directory;
 	try {
-		const [visual, audio] = await Promise.all([readMedia(selectedSticker, "sticker"), readMedia(voiceNote, "audio")]);
-		if (audio.toString("ascii", 0, 4) !== "OggS" || !audio.subarray(0, 128).includes(Buffer.from("OpusHead"))) {
-			throw new Error("Voice note is not Ogg Opus");
-		}
+		directory = await mkdtemp(path.join(os.tmpdir(), "tars-stealaudio-"));
+		const input = path.join(directory, "input");
+		const output = path.join(directory, "audio.ogg");
+		const visual = await readMedia(selectedSticker, "sticker", 1024 * 1024);
+		const mediaType = quoted.audioMessage ? "audio" : "document";
+		await writeFile(input, await readMedia(audioSource, mediaType, maxAudioBytes));
+		await run(process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg", [
+			"-nostdin", "-v", "error", "-xerror",
+			"-protocol_whitelist", "file", "-format_whitelist", "mp3,mov,aac,wav,ogg,flac,matroska,webm", "-i", input,
+			"-map", "0:a:0", "-af", "asetpts=N/SR/TB", "-t", "10",
+			"-c:a", "libopus", "-ac", "1", "-b:a", "64k", output,
+		], { timeout: 30000, killSignal: "SIGKILL" });
 		const { audioMessage } = await prepareWAMessageMedia({
-			audio,
+			audio: await readFile(output),
 			mimetype: "audio/ogg; codecs=opus",
-			seconds: voiceNote.seconds,
 		}, { upload: sock.waUploadToServer });
 		const { width, height, isAnimated } = selectedSticker;
 		await sendSoundSticker(sock, from, visual, audioMessage, { width, height, isAnimated });
-	} catch {
-		return reply(`Could not pair the media. Select the sticker again with ${command} and try a fresh voice note.`);
+	} catch (error) {
+		const reason = error instanceof RangeError ? "The sticker or audio file is too large." : "Could not process or send that audio.";
+		return reply(`${reason} Select the sticker again with ${command} and try a playable file under 10 MiB.`);
+	} finally {
+		activeAudioJobs--;
+		if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {});
 	}
 }
 
@@ -171,6 +193,6 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 export default () => ({
 	cmd: ["steal", "stealn", "stealaudio"],
 	desc: "Steal stickers with custom pack and author names or default ones.",
-	usage: "steal | steal pack <name> author <name> | stealaudio (reply to a sticker, then a voice note)",
+	usage: "steal | steal pack <name> author <name> | stealaudio (reply to a sticker, then an audio file or voice note)",
 	handler,
 });
