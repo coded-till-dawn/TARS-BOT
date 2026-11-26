@@ -1,6 +1,7 @@
 import { findSoundSticker, getSoundSticker, sendSoundSticker } from "../../utils/soundSticker.js";
 import { getMemberData } from "../../db/members.js";
-import { downloadContentFromMessage } from "baileys";
+import { downloadContentFromMessage, normalizeMessageContent, prepareWAMessageMedia } from "baileys";
+import NodeCache from "node-cache";
 import WSF from "wa-sticker-formatter";
 import nodeWebpmux from "node-webpmux";
 const { Image: WebpImage } = nodeWebpmux;
@@ -9,6 +10,61 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 const getRandom = (ext) => path.join(os.tmpdir(), `${Math.floor(Math.random() * 10000)}${ext}`);
+
+const pendingStickers = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false });
+
+async function readMedia(message, type) {
+	const stream = await downloadContentFromMessage(message, type);
+	const chunks = [];
+	let size = 0;
+	for await (const chunk of stream) {
+		size += chunk.length;
+		if (size > 1024 * 1024) throw new Error("Sticker or voice note exceeds 1 MiB");
+		chunks.push(chunk);
+	}
+	return Buffer.concat(chunks);
+}
+
+async function pairAudio(sock, msg, from, info) {
+	const reply = (text) => info.sendMessageWTyping(from, { text }, { quoted: msg });
+	const command = `${info.prefix}stealaudio`;
+	const key = `${from}:${info.senderJid ?? msg.key.participant ?? from}`;
+	const quoted = normalizeMessageContent(info.extendedMessageOriginal?.quotedMessage);
+	const sticker = getSoundSticker(quoted);
+	if (sticker) {
+		if (!pendingStickers.has(key) && pendingStickers.getStats().keys >= 300) {
+			pendingStickers.del(pendingStickers.keys()[0]);
+		}
+		pendingStickers.set(key, sticker);
+		return reply(`Sticker selected for five minutes. Reply to an Ogg/Opus voice note of up to 10 seconds with ${command}.`);
+	}
+
+	const voiceNote = quoted?.audioMessage;
+	const selectedSticker = pendingStickers.get(key);
+	if (!voiceNote || !selectedSticker) {
+		return reply(`Reply to a sticker with ${command}, then reply to a voice note with the same command.`);
+	}
+	if (!voiceNote.seconds || voiceNote.seconds > 10 || !/^audio\/ogg(?:;|$)/i.test(voiceNote.mimetype ?? "")) {
+		return reply("Use a WhatsApp Ogg/Opus voice note of up to 10 seconds.");
+	}
+
+	pendingStickers.del(key);
+	try {
+		const [visual, audio] = await Promise.all([readMedia(selectedSticker, "sticker"), readMedia(voiceNote, "audio")]);
+		if (audio.toString("ascii", 0, 4) !== "OggS" || !audio.subarray(0, 128).includes(Buffer.from("OpusHead"))) {
+			throw new Error("Voice note is not Ogg Opus");
+		}
+		const { audioMessage } = await prepareWAMessageMedia({
+			audio,
+			mimetype: "audio/ogg; codecs=opus",
+			seconds: voiceNote.seconds,
+		}, { upload: sock.waUploadToServer });
+		const { width, height, isAnimated } = selectedSticker;
+		await sendSoundSticker(sock, from, visual, audioMessage, { width, height, isAnimated });
+	} catch {
+		return reply(`Could not pair the media. Select the sticker again with ${command} and try a fresh voice note.`);
+	}
+}
 
 async function addExifNodeWebpmux(buffer, pack, author) {
 	const json = JSON.stringify({
@@ -36,6 +92,7 @@ async function addExifNodeWebpmux(buffer, pack, author) {
 
 const handler = async (sock, msg, from, args, msgInfoObj) => {
 	const { evv, type, sendMessageWTyping, senderJid, command, extendedMessageOriginal } = msgInfoObj;
+	if (command === "stealaudio") return pairAudio(sock, msg, from, msgInfoObj);
 	const memberData = await getMemberData(senderJid);
 
 	const quotedSticker = getSoundSticker(extendedMessageOriginal?.quotedMessage);
@@ -53,7 +110,7 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 				return;
 			}
 			if (audio) {
-				return sendMessageWTyping(from, { text: "The quoted sticker has incomplete audio details. Reply directly to the original sound sticker." }, { quoted: msg });
+				return sendMessageWTyping(from, { text: `The quoted sticker has incomplete audio details. Reply to the original sticker, or use ${msgInfoObj.prefix}stealaudio to supply the sound.` }, { quoted: msg });
 			}
 			return sendMessageWTyping(from, { sticker: buffer }, { quoted: msg });
 		};
@@ -112,8 +169,8 @@ const handler = async (sock, msg, from, args, msgInfoObj) => {
 };
 
 export default () => ({
-	cmd: ["steal", "stealn"],
+	cmd: ["steal", "stealn", "stealaudio"],
 	desc: "Steal stickers with custom pack and author names or default ones.",
-	usage: "steal | steal pack <name> author <name>",
+	usage: "steal | steal pack <name> author <name> | stealaudio (reply to a sticker, then a voice note)",
 	handler,
 });
