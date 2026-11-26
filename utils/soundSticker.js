@@ -82,14 +82,26 @@ export function rememberSoundSticker(jid, messageId, sticker) {
 
 export function findSoundSticker(jid, messageId, quotedSticker) {
 	const original = recentSoundStickers.get(`${jid}:${messageId}`);
-	if (original || !quotedSticker?.fileEncSha256?.length) return original;
+	if (original || !quotedSticker) return original;
 
-	// Forwarding can change the message ID while keeping the same uploaded image.
-	const hash = Buffer.from(quotedSticker.fileEncSha256);
-	const candidates = recentSoundStickers.keys().filter((key) => key.startsWith(`${jid}:`));
-	const matches = candidates.map((key) => recentSoundStickers.get(key)).filter(
-		(sticker) => sticker?.fileEncSha256 && hash.equals(Buffer.from(sticker.fileEncSha256)),
-	);
+	// A quote can omit either the encrypted hash or the original message ID.
+	// Match the same upload within the current chat, using its path and key
+	// when the encrypted hash is unavailable.
+	const hash = quotedSticker.fileEncSha256?.length && Buffer.from(quotedSticker.fileEncSha256);
+	const mediaKey = quotedSticker.mediaKey?.length && Buffer.from(quotedSticker.mediaKey);
+	const { directPath } = quotedSticker;
+	if (!hash && !(directPath && mediaKey)) return;
+	const matches = recentSoundStickers.keys()
+		.filter((key) => key.startsWith(`${jid}:`))
+		.map((key) => recentSoundStickers.get(key))
+		.filter((sticker) => {
+			if (!sticker) return false;
+			if (hash && sticker.fileEncSha256?.length) {
+				return hash.equals(Buffer.from(sticker.fileEncSha256));
+			}
+			return directPath && mediaKey && sticker.directPath === directPath &&
+				sticker.mediaKey?.length && mediaKey.equals(Buffer.from(sticker.mediaKey));
+		});
 	const first = matches[0];
 	if (first?.audioMessage.directPath && matches.every((sticker) => sticker.audioMessage.directPath === first.audioMessage.directPath)) {
 		return first;
